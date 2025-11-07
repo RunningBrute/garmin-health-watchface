@@ -1,0 +1,5 @@
+<resources>
+    <layouts>
+        <layout id="MainLayout"/>
+    </layouts>
+</resources>

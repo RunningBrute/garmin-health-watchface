@@ -1,0 +1,50 @@
+name: Build (Windows)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Garmin Connect IQ SDK (Windows)
+        run: |
+          $url = "https://developer.garmin.com/downloads/connect-iq/sdks/connectiq-sdk-win-8.3.0-2025-09-22-5813687a0.zip"
+          $zip = "$env:USERPROFILE\connectiq-sdk.zip"
+          Write-Host "Downloading SDK from $url ..."
+          Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile $zip
+          Write-Host "Extracting SDK..."
+          Expand-Archive -Path $zip -DestinationPath "$env:USERPROFILE\connectiq-sdk" -Force
+          Write-Host "SDK extracted."
+        shell: pwsh
+
+      - name: Add SDK to PATH
+        run: |
+          $sdkBin = Get-ChildItem "$env:USERPROFILE\connectiq-sdk" -Recurse -Include connectiq.exe | Select-Object -First 1 | Split-Path
+          if (-not $sdkBin) { Write-Error "Could not locate connectiq.exe" ; exit 1 }
+          Write-Host "Found connectiq.exe in: $sdkBin"
+          echo "$sdkBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Verify connectiq CLI
+        run: |
+          connectiq --help
+        shell: pwsh
+
+      - name: Build Garmin Project
+        run: |
+          connectiq build
+        shell: pwsh
+
+      - name: Upload build artifact (.prg)
+        uses: actions/upload-artifact@v4
+        with:
+          name: connectiq-build
+          path: bin/*.prg

@@ -1,0 +1,16 @@
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="6">
+  <iq:application id="com.example.garminhealthwatchface" name="garmin-health-watchface" type="watchface" minSdkVersion="3.2.0" version="1.0.0">
+    <iq:products>
+      <iq:product id="fenix6pro"/>
+    </iq:products>
+    <iq:permissions>
+      <iq:uses-permission id="access_heart_rate"/>
+      <iq:uses-permission id="access_pulse_ox"/>
+      <iq:uses-permission id="access_activity"/>
+      <iq:uses-permission id="access_location"/>
+    </iq:permissions>
+    <iq:languages>
+      <iq:language>eng</iq:language>
+    </iq:languages>
+  </iq:application>
+</iq:manifest>
