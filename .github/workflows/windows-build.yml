@@ -1,4 +1,4 @@
-name: Build (Windows) - Fallback SDK detection
+name: Build (Windows) - Garmin SDK 6.4.1
 
 on:
   push:
@@ -9,86 +9,49 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Garmin SDK Manager ZIP
+      - name: Download Garmin Connect IQ SDK 6.4.1
         run: |
-          $url = "https://developer.garmin.com/downloads/connect-iq/sdk-manager/connectiq-sdk-manager-windows.zip"
-          $zip = "$env:USERPROFILE\connectiq-sdk-manager.zip"
-          Write-Host "Downloading SDK Manager ZIP from: $url"
+          $url = "https://developer.garmin.com/downloads/connect-iq/sdks/connectiq-sdk-win-6.4.1-2023-12-04-6cafd260d.zip"
+          $zip = "$env:USERPROFILE\connectiq-sdk.zip"
+          $dest = "$env:USERPROFILE\connectiq-sdk"
+          Write-Host "Downloading SDK from: $url"
           Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:USERPROFILE\connectiq-sdk-manager" -Force
-          Write-Host "Extracted SDK Manager ZIP."
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          Write-Host "SDK extracted to $dest"
         shell: pwsh
 
-      - name: Try installing latest SDK (silent)
-        continue-on-error: true
+      - name: Locate compiler (monkeyc / connectiq-cli)
         run: |
-          $sdkMgr = Get-ChildItem "$env:USERPROFILE\connectiq-sdk-manager" -Recurse -Include "sdkmanager.exe" | Select-Object -First 1
-          if (-not $sdkMgr) {
-            Write-Error "sdkmanager.exe not found after extraction"
+          $sdkRoot = "$env:USERPROFILE\connectiq-sdk"
+          $exe = Get-ChildItem $sdkRoot -Recurse -Include "monkeyc.exe","connectiq-cli.exe","connectiq.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "No compiler executable found in SDK."
             exit 1
           }
-          Write-Host "Running SDK Manager: $($sdkMgr.FullName)"
-          & $sdkMgr.FullName --install-latest -y
-          Write-Host "SDK installation attempted."
-        shell: pwsh
-
-      - name: Detect SDK folder (from install or bundle)
-        id: find_sdk
-        run: |
-          $appDataSdk = Join-Path $env:APPDATA "Garmin\ConnectIQ\Sdks"
-          $localSdk = Join-Path $env:USERPROFILE "connectiq-sdk-manager"
-          Write-Host "Looking for SDK in: $appDataSdk and $localSdk"
-          $sdkCandidates = @()
-
-          if (Test-Path $appDataSdk) {
-            Write-Host "Found folder in AppData, scanning..."
-            $sdkCandidates += Get-ChildItem $appDataSdk -Directory -Recurse -ErrorAction SilentlyContinue
-          }
-
-          if (Test-Path $localSdk) {
-            Write-Host "Scanning local manager folder for SDKs..."
-            $sdkCandidates += Get-ChildItem $localSdk -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "sdk" -or $_.FullName -match "connectiq" }
-          }
-
-          if ($sdkCandidates.Count -eq 0) {
-            Write-Error "No SDK folders found in AppData or extracted ZIP."
-            exit 1
-          }
-
-          Write-Host "Possible SDK paths found:"
-          $sdkCandidates | ForEach-Object { Write-Host " - $($_.FullName)" }
-
-          $compiler = Get-ChildItem $sdkCandidates.FullName -Recurse -Include "connectiq-cli.exe","monkeyc.exe","connectiq.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-
-          if (-not $compiler) {
-            Write-Error "No compiler (connectiq-cli/monkeyc/connectiq) found in any detected SDK."
-            exit 1
-          }
-
-          Write-Host "Using compiler: $($compiler.FullName)"
-          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $compiler.FullName)
-          Add-Content -Path $env:GITHUB_ENV -Value ("CONNECTIQ_EXE=" + $compiler.FullName)
+          Write-Host "Using compiler: $($exe.FullName)"
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $exe.FullName)
+          Add-Content -Path $env:GITHUB_ENV -Value ("CONNECTIQ_EXE=" + $exe.FullName)
         shell: pwsh
 
       - name: Verify compiler
         run: |
-          Write-Host "CONNECTIQ_EXE: $env:CONNECTIQ_EXE"
+          Write-Host "CONNECTIQ_EXE = $env:CONNECTIQ_EXE"
           & $env:CONNECTIQ_EXE --help
         shell: pwsh
 
-      - name: Build Garmin project
+      - name: Build project
         run: |
-          Write-Host "Building project using $env:CONNECTIQ_EXE"
+          Write-Host "Building project using: $env:CONNECTIQ_EXE"
           & $env:CONNECTIQ_EXE build
         shell: pwsh
 
-      - name: Show bin/ and .prg
+      - name: Show bin/ contents
         run: |
           if (Test-Path ".\bin") {
             Write-Host "Contents of ./bin:"
@@ -96,8 +59,6 @@ jobs:
           } else {
             Write-Host "No ./bin folder found."
           }
-          Write-Host "Searching for .prg files in workspace:"
-          Get-ChildItem -Path . -Recurse -Filter *.prg -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host " -> " + $_.FullName }
         shell: pwsh
 
       - name: Upload .prg artifact
