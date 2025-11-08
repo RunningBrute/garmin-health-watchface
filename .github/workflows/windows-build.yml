@@ -1,4 +1,4 @@
-name: Build (Windows) - SDKManager.exe version
+name: Build (Windows) - Fallback SDK detection
 
 on:
   push:
@@ -25,7 +25,8 @@ jobs:
           Write-Host "Extracted SDK Manager ZIP."
         shell: pwsh
 
-      - name: Install latest SDK (silent)
+      - name: Try installing latest SDK (silent)
+        continue-on-error: true
         run: |
           $sdkMgr = Get-ChildItem "$env:USERPROFILE\connectiq-sdk-manager" -Recurse -Include "sdkmanager.exe" | Select-Object -First 1
           if (-not $sdkMgr) {
@@ -34,28 +35,45 @@ jobs:
           }
           Write-Host "Running SDK Manager: $($sdkMgr.FullName)"
           & $sdkMgr.FullName --install-latest -y
-          Write-Host "SDK installation complete."
-          Write-Host "Listing installed SDKs:"
-          Get-ChildItem "$env:APPDATA\Garmin\ConnectIQ\Sdks" -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-Host " - " + $_.FullName }
+          Write-Host "SDK installation attempted."
         shell: pwsh
 
-      - name: Find compiler executable (connectiq-cli / monkeyc)
-        id: find_compiler
+      - name: Detect SDK folder (from install or bundle)
+        id: find_sdk
         run: |
-          $sdkPath = Join-Path $env:APPDATA "Garmin\ConnectIQ\Sdks"
-          if (!(Test-Path $sdkPath)) {
-            Write-Error "SDK path not found: $sdkPath"
+          $appDataSdk = Join-Path $env:APPDATA "Garmin\ConnectIQ\Sdks"
+          $localSdk = Join-Path $env:USERPROFILE "connectiq-sdk-manager"
+          Write-Host "Looking for SDK in: $appDataSdk and $localSdk"
+          $sdkCandidates = @()
+
+          if (Test-Path $appDataSdk) {
+            Write-Host "Found folder in AppData, scanning..."
+            $sdkCandidates += Get-ChildItem $appDataSdk -Directory -Recurse -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $localSdk) {
+            Write-Host "Scanning local manager folder for SDKs..."
+            $sdkCandidates += Get-ChildItem $localSdk -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "sdk" -or $_.FullName -match "connectiq" }
+          }
+
+          if ($sdkCandidates.Count -eq 0) {
+            Write-Error "No SDK folders found in AppData or extracted ZIP."
             exit 1
           }
-          Write-Host "Looking for compiler in: $sdkPath"
-          $exe = Get-ChildItem $sdkPath -Recurse -Include "connectiq-cli.exe","monkeyc.exe","connectiq.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "No compiler executable found under $sdkPath"
+
+          Write-Host "Possible SDK paths found:"
+          $sdkCandidates | ForEach-Object { Write-Host " - $($_.FullName)" }
+
+          $compiler = Get-ChildItem $sdkCandidates.FullName -Recurse -Include "connectiq-cli.exe","monkeyc.exe","connectiq.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if (-not $compiler) {
+            Write-Error "No compiler (connectiq-cli/monkeyc/connectiq) found in any detected SDK."
             exit 1
           }
-          Write-Host "Found compiler: $($exe.FullName)"
-          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $exe.FullName)
-          Add-Content -Path $env:GITHUB_ENV -Value ("CONNECTIQ_EXE=" + $exe.FullName)
+
+          Write-Host "Using compiler: $($compiler.FullName)"
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $compiler.FullName)
+          Add-Content -Path $env:GITHUB_ENV -Value ("CONNECTIQ_EXE=" + $compiler.FullName)
         shell: pwsh
 
       - name: Verify compiler
@@ -70,7 +88,7 @@ jobs:
           & $env:CONNECTIQ_EXE build
         shell: pwsh
 
-      - name: Show bin/ and any .prg
+      - name: Show bin/ and .prg
         run: |
           if (Test-Path ".\bin") {
             Write-Host "Contents of ./bin:"
