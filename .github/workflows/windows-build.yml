@@ -1,107 +1,69 @@
-name: Build (Windows)
+name: Build (Windows with SDK Manager)
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Garmin Connect IQ SDK (Windows zip)
+      - name: Download Garmin SDK Manager
         run: |
-          $url = "https://developer.garmin.com/downloads/connect-iq/sdks/connectiq-sdk-win-8.3.0-2025-09-22-5813687a0.zip"
-          $zip = Join-Path $env:USERPROFILE "connectiq-sdk.zip"
-          Write-Host "Downloading SDK from: $url"
-          Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile $zip
-          Write-Host "Downloaded to: $zip"
-          $dest = Join-Path $env:USERPROFILE "connectiq-sdk"
-          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-          Write-Host "Extracting SDK to: $dest"
-          Expand-Archive -Path $zip -DestinationPath $dest -Force
-          Write-Host "Extraction done."
+          $sdkInstaller = "$env:USERPROFILE\GarminSDKManager.exe"
+          Invoke-WebRequest -Uri "https://developer.garmin.com/downloads/connect-iq/sdk-manager/ConnectIQSDKManagerInstaller.exe" -OutFile $sdkInstaller
+          Write-Host "Installing SDK Manager silently..."
+          Start-Process -FilePath $sdkInstaller -ArgumentList "/S" -Wait
         shell: pwsh
 
-      - name: Find and add connectiq to PATH (robust)
+      - name: Install latest SDK silently
         run: |
-          $sdkRoot = Join-Path $env:USERPROFILE "connectiq-sdk"
-          Write-Host "SDK root = $sdkRoot"
-
-          if (!(Test-Path $sdkRoot)) {
-            Write-Error "SDK root does not exist: $sdkRoot"
+          $sdkManager = "$env:APPDATA\Garmin\ConnectIQ\SDKManager.exe"
+          if (!(Test-Path $sdkManager)) {
+            Write-Error "SDK Manager not found at $sdkManager"
             exit 1
           }
 
-          Write-Host "Top-level content of SDK root:"
-          Get-ChildItem $sdkRoot -Force | Format-List | Out-String | Write-Host
-
-          Write-Host "Listing up to 500 files under SDK root (for debugging):"
-          Get-ChildItem $sdkRoot -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 500 | ForEach-Object { Write-Host $_.FullName }
-
-          # look for likely connectiq executables
-          $candidates = Get-ChildItem $sdkRoot -Recurse -File -Force -Include 'connectiq-cli.exe','connectiq.exe','connectiq.bat','connectiq-*.exe','connectiq*.*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'connectiq' }
-
-          if ($candidates -and $candidates.Count -gt 0) {
-            Write-Host "Found connectiq-like executables:"
-            $candidates | ForEach-Object { Write-Host " - $($_.FullName)" }
-
-            # Prefer connectiq-cli.exe if present
-            $exe = $candidates | Where-Object { $_.Name -ieq 'connectiq-cli.exe' } | Select-Object -First 1
-            if (-not $exe) { $exe = $candidates | Select-Object -First 1 }
-
-            $exeFull = $exe.FullName
-            $sdkBin = Split-Path $exeFull
-
-            Write-Host "Using executable: $exeFull"
-            Write-Host "Adding $sdkBin to PATH via GITHUB_PATH..."
-            # add to PATH for subsequent steps
-            Add-Content -Path $env:GITHUB_PATH -Value $sdkBin
-            # also expose the full exe path as environment variable for explicit invocation
-            Add-Content -Path $env:GITHUB_ENV -Value ("CONNECTIQ_EXE=" + $exeFull)
-          } else {
-            Write-Error "Could not locate any connectiq executable under $sdkRoot. Full listing above."
-            exit 1
-          }
+          Write-Host "Installing latest SDK (silent mode)..."
+          & $sdkManager --install-latest -y
+          Write-Host "Installed SDKs:"
+          Get-ChildItem "$env:APPDATA\Garmin\ConnectIQ\Sdks"
         shell: pwsh
 
-      - name: Verify connectiq CLI (which and version)
+      - name: Find Connect IQ CLI or monkeyc
         run: |
-          Write-Host "CONNECTIQ_EXE (from env): $env:CONNECTIQ_EXE"
-          if ($env:CONNECTIQ_EXE) {
-            Write-Host "Invoking explicit executable to show help/version:"
-            & $env:CONNECTIQ_EXE --help
-          } else {
-            Write-Host "connectiq CLI not set in CONNECTIQ_EXE; trying generic 'connectiq' command:"
-            connectiq --help
-          }
+          $sdkDir = Get-ChildItem "$env:APPDATA\Garmin\ConnectIQ\Sdks" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (!$sdkDir) { Write-Error "No SDKs found!" ; exit 1 }
+
+          Write-Host "SDK in use: $($sdkDir.FullName)"
+          $cliPath = Get-ChildItem $sdkDir.FullName -Recurse -Include "connectiq-cli.exe","monkeyc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (!$cliPath) { Write-Error "CLI or monkeyc not found in SDK!" ; exit 1 }
+
+          Write-Host "Using compiler: $($cliPath.FullName)"
+          echo "$($cliPath.DirectoryName)" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Add-Content -Path $env:GITHUB_ENV -Value ("CONNECTIQ_CLI=" + $cliPath.FullName)
+        shell: pwsh
+
+      - name: Verify Connect IQ CLI
+        run: |
+          Write-Host "CLI location: $env:CONNECTIQ_CLI"
+          & $env:CONNECTIQ_CLI --help
         shell: pwsh
 
       - name: Build Garmin Project
         run: |
-          # if CONNECTIQ_EXE set, invoke it directly, otherwise rely on PATH
-          if ($env:CONNECTIQ_EXE) {
-            Write-Host "Building with explicit CLI: $env:CONNECTIQ_EXE"
-            & $env:CONNECTIQ_EXE build
-          } else {
-            Write-Host "Building with 'connectiq build' (from PATH)"
-            connectiq build
-          }
+          Write-Host "Building project with CLI..."
+          & $env:CONNECTIQ_CLI build
         shell: pwsh
 
-      - name: List bin folder and find .prg
-        run: |
-          Write-Host "Listing bin/ directory (if exists):"
-          if (Test-Path ".\bin") {
-            Get-ChildItem -Path .\bin -Recurse -Force | ForEach-Object { Write-Host $_.FullName }
-          } else {
-            Write-Host "No bin/ folder found in repo root."
-          }
-          Write-Host "Searching for any .prg files in repo:"
-          Get-ChildItem -Path . -Recurse -Filter *.prg -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host " -> " + $_.FullName }
-        shell: pwsh
+      - name: Upload built .prg file
+        uses: actions/upload-artifact@v4
+        with:
+          name: connectiq-build
+          path: bin/*.prg
