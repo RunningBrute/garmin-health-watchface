@@ -29,7 +29,7 @@ jobs:
       - name: Locate compiler (monkeyc / connectiq-cli)
         run: |
           $sdkRoot = "$env:USERPROFILE\connectiq-sdk"
-          $exe = Get-ChildItem $sdkRoot -Recurse -Include "monkeyc.exe","connectiq-cli.exe","connectiq.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $exe = Get-ChildItem $sdkRoot -Recurse -Include "monkeyc", "connectiq" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) {
             Write-Error "No compiler executable found in SDK."
             exit 1
